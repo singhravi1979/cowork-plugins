@@ -1,0 +1,889 @@
+<!DOCTYPE html><script type="application/json" id="cowork-artifact-meta">
+{
+  "name": "MR Review Dashboard",
+  "schemaVersion": 1,
+  "description": "AI-powered PR/MR Review dashboard for GitLab and GitHub. Uses direct REST API (PAT auth) + window.cowork.askClaude() for AI reviews. Merges AGENTS.frontend.md / AGENTS.backend.md guidelines, posts approved/rejected reviews back as PR/MR comments.",
+  "mcpTools": [],
+  "mcpServerNames": []
+}
+</script>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MR/PR Review Dashboard</title>
+<style>
+:root {
+  color-scheme: light;
+  --bg: #f6f8fa; --card: #ffffff; --border: #d0d7de;
+  --text: #1f2328; --text-muted: #656d76;
+  --accent: #0969da; --accent-hover: #0757ba;
+  --green: #1a7f37; --green-bg: #dafbe1;
+  --red: #cf222e;   --red-bg: #ffebe9;
+  --yellow: #9a6700; --yellow-bg: #fff8c5;
+  --purple: #6e40c9; --purple-bg: #fbefff;
+  --radius: 8px; --shadow: 0 1px 3px rgba(0,0,0,0.08);
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); font-size: 14px; line-height: 1.5; }
+
+#setup { max-width: 520px; margin: 48px auto; padding: 32px; background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); }
+#setup h2 { font-size: 20px; margin-bottom: 6px; }
+.subtitle { color: var(--text-muted); font-size: 13px; margin-bottom: 24px; }
+.field { margin-bottom: 16px; }
+.field label { display: block; font-weight: 500; font-size: 13px; margin-bottom: 4px; }
+.field input { width: 100%; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; font-size: 14px; outline: none; background: white; }
+.field input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(9,105,218,0.15); }
+.hint { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
+
+.provider-tabs { display: flex; gap: 8px; margin-bottom: 4px; }
+.provider-tab { padding: 6px 16px; border-radius: 6px; border: 1px solid var(--border); background: white; cursor: pointer; font-size: 13px; font-weight: 500; color: var(--text-muted); transition: background 120ms ease, color 120ms ease, border-color 120ms ease; }
+.provider-tab.active { background: var(--accent); color: white; border-color: var(--accent); }
+
+.btn { display: inline-flex; align-items: center; gap: 5px; padding: 7px 14px; border-radius: 6px; border: 1px solid var(--border); background: white; color: var(--text); font-size: 13px; font-weight: 500; cursor: pointer; text-decoration: none; white-space: nowrap; transition: background .12s; }
+.btn:hover { background: #f3f4f6; }
+.btn-primary  { background: var(--accent);    color: white; border-color: var(--accent); }
+.btn-primary:hover  { background: var(--accent-hover); }
+.btn-green  { background: var(--green-bg);  color: var(--green);  border-color: #a7e3b3; }
+.btn-green:hover  { background: #c5f0cc; }
+.btn-red    { background: var(--red-bg);    color: var(--red);    border-color: #ffb8b1; }
+.btn-red:hover    { background: #ffd0cc; }
+.btn-purple { background: var(--purple-bg); color: var(--purple); border-color: #d9c2f5; }
+.btn-purple:hover { background: #f2e4ff; }
+.btn:disabled { opacity: .5; cursor: not-allowed; }
+.btn-sm   { padding: 4px 10px; font-size: 12px; }
+.btn-full { width: 100%; justify-content: center; }
+
+#header { position: sticky; top: 0; z-index: 100; background: var(--card); border-bottom: 1px solid var(--border); padding: 10px 20px; display: flex; align-items: center; gap: 10px; }
+#header h1 { font-size: 15px; font-weight: 600; flex: 1; }
+
+#stats-bar { background: var(--card); border-bottom: 1px solid var(--border); padding: 8px 20px; display: flex; align-items: center; gap: 16px; font-size: 13px; color: var(--text-muted); flex-wrap: wrap; }
+.stat-num { font-weight: 600; color: var(--text); }
+#filter-tabs { display: flex; gap: 3px; margin-left: auto; }
+.tab { padding: 3px 11px; border-radius: 20px; border: 1px solid transparent; cursor: pointer; font-size: 12px; font-weight: 500; color: var(--text-muted); }
+.tab:hover { background: var(--bg); }
+.tab.active { background: var(--accent); color: white; }
+
+#main { padding: 16px 20px; }
+
+.mr-card { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 10px; box-shadow: var(--shadow); overflow: hidden; }
+.mr-card.card-approved { border-left: 3px solid var(--green); }
+.mr-card.card-rejected { border-left: 3px solid var(--red); }
+.mr-card.card-posted   { border-left: 3px solid var(--accent); }
+.card-top { padding: 12px 14px 0; }
+.mr-title-link { font-weight: 600; font-size: 14px; color: var(--text); text-decoration: none; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mr-title-link:hover { color: var(--accent); }
+.mr-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 4px; font-size: 12px; color: var(--text-muted); }
+.badge { display: inline-flex; align-items: center; padding: 1px 7px; border-radius: 12px; font-size: 11px; font-weight: 500; border: 1px solid transparent; }
+.badge-assignee { background: #eef6ff; color: var(--accent);  border-color: #c5dfff; }
+.badge-reviewer { background: var(--yellow-bg); color: var(--yellow); border-color: #e6d57a; }
+.badge-posted   { background: var(--green-bg);  color: var(--green);  border-color: #a7e3b3; }
+.badge-approved { background: var(--green-bg);  color: var(--green);  border-color: #a7e3b3; }
+.badge-rejected { background: var(--red-bg);    color: var(--red);    border-color: #ffb8b1; }
+.card-actions { display: flex; align-items: center; gap: 6px; padding: 10px 14px; flex-wrap: wrap; }
+
+.review-wrap { border-top: 1px solid var(--border); padding: 12px 14px; background: #fafbfc; }
+.review-label { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; color: var(--text-muted); margin-bottom: 8px; }
+.review-text { font-size: 13px; line-height: 1.65; white-space: pre-wrap; background: white; border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px; max-height: 320px; overflow-y: auto; }
+.review-editor { width: 100%; min-height: 180px; font-size: 13px; line-height: 1.65; padding: 10px 12px; border: 1px solid var(--accent); border-radius: 6px; resize: vertical; font-family: inherit; outline: none; }
+.review-actions { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; align-items: center; }
+
+.generating { display: flex; align-items: center; gap: 10px; color: var(--text-muted); font-size: 13px; padding: 10px 0; }
+.spinner { width: 16px; height: 16px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin .7s linear infinite; flex-shrink: 0; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+#loading-state { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 220px; gap: 12px; color: var(--text-muted); }
+.error-box { background: var(--red-bg); border: 1px solid #ffb8b1; border-radius: 6px; padding: 10px 14px; color: var(--red); font-size: 13px; margin-bottom: 12px; }
+.empty-state { text-align: center; padding: 48px 20px; color: var(--text-muted); }
+.empty-state .emoji { font-size: 40px; margin-bottom: 10px; }
+</style>
+</head>
+<body>
+
+<!-- Setup screen -->
+<div id="setup" style="display:none">
+  <h2>&#x1F500; MR/PR Review Dashboard</h2>
+  <p class="subtitle">Powered by the <strong>mr-reviewer</strong> plugin. Uses your Claude subscription &mdash; no extra API key needed.</p>
+
+  <div class="field">
+    <label>Git Provider <span style="color:var(--red)">*</span></label>
+    <div class="provider-tabs" id="provider-tabs">
+      <button class="provider-tab active" data-provider="gitlab" type="button">GitLab</button>
+      <button class="provider-tab" data-provider="github" type="button">GitHub</button>
+    </div>
+  </div>
+
+  <div class="field">
+    <label id="lbl-api-url">GitLab URL <span style="color:var(--red)">*</span></label>
+    <input type="text" id="cfg-gl-url" placeholder="https://gitlab.com" autocomplete="off">
+    <div class="hint" id="hint-api-url">Your GitLab instance URL. Use https://gitlab.com for GitLab.com.</div>
+  </div>
+
+  <div class="field">
+    <label id="lbl-pat">Personal Access Token <span style="color:var(--red)">*</span></label>
+    <input type="password" id="cfg-pat" placeholder="glpat-..." autocomplete="off">
+    <div class="hint" id="hint-pat">GitLab &rarr; User Settings &rarr; Access Tokens &rarr; scope: api</div>
+  </div>
+
+  <div class="field">
+    <label>Your username <span style="font-weight:400;color:var(--text-muted)">(optional)</span></label>
+    <input type="text" id="cfg-me" placeholder="your-username" autocomplete="off">
+    <div class="hint">Filter to PRs/MRs where you are assignee or reviewer. Leave blank to show all.</div>
+  </div>
+
+  <div class="field">
+    <label>Projects to watch <span style="color:var(--red)">*</span></label>
+    <input type="text" id="cfg-projects" placeholder="your-org/your-repo, your-org/another-repo">
+    <div class="hint">Comma-separated project paths.</div>
+  </div>
+
+  <div class="field">
+    <label>Guidelines Repo <span style="font-weight:400;color:var(--text-muted)">(optional)</span></label>
+    <input type="text" id="cfg-common-repo" placeholder="your-org/coding-standards">
+    <div class="hint">Repo containing <code>AGENTS.frontend.md</code> / <code>AGENTS.backend.md</code>. Leave blank to skip.</div>
+  </div>
+
+  <div class="field" id="field-keywords" style="display:none">
+    <label>Frontend project keywords</label>
+    <input type="text" id="cfg-frontend-kw" placeholder="web, ui, frontend, react">
+    <div class="hint">Project paths containing these words use <code>AGENTS.frontend.md</code>; others use <code>AGENTS.backend.md</code>.</div>
+  </div>
+
+  <button class="btn btn-primary btn-full" id="btn-connect" style="margin-top:8px">Connect &amp; Load Reviews</button>
+  <div id="setup-err" class="error-box" style="display:none;margin-top:12px"></div>
+</div>
+
+<!-- Main app -->
+<div id="app" style="display:none">
+  <div id="header">
+    <h1>&#x1F500; MR/PR Review Dashboard</h1>
+    <span id="sync-label" style="font-size:12px;color:var(--text-muted)"></span>
+    <button class="btn btn-sm" id="btn-refresh">&#8635; Refresh</button>
+    <button class="btn btn-sm" id="btn-settings">&#9881; Settings</button>
+    <span id="user-chip" style="font-size:13px;color:var(--text-muted)"></span>
+  </div>
+  <div id="stats-bar">
+    <span><span class="stat-num" id="st-total">0</span> open</span>
+    <span><span class="stat-num" id="st-reviewed">0</span> reviewed</span>
+    <span><span class="stat-num" id="st-posted">0</span> posted</span>
+    <div id="filter-tabs">
+      <div class="tab active" data-f="all">All</div>
+      <div class="tab" data-f="assignee">Assignee</div>
+      <div class="tab" data-f="reviewer">Reviewer</div>
+      <div class="tab" data-f="pending">Needs Review</div>
+    </div>
+  </div>
+  <div id="main">
+    <div id="loading-state"><div class="spinner" style="width:28px;height:28px;border-width:3px"></div><span>Loading...</span></div>
+    <div id="err-area"></div>
+    <div id="mr-list" style="display:none"></div>
+  </div>
+</div>
+
+<script>
+'use strict';
+
+// ── Storage ───────────────────────────────────────────────────────────
+const ls = {
+  get: function(k) { try { return JSON.parse(localStorage.getItem(k)); } catch(_) { return null; } },
+  set: function(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch(_) {} },
+};
+
+let CFG = ls.get('mr_cfg') || {};
+let MRS = [];
+let activeFilter = 'all';
+
+// ── API base (now routes through local server on 7842) ────────────────
+const API_BASE = 'http://localhost:7842';
+const API_TIMEOUT_MS = 20000;
+
+function providerBase() {
+  var p = CFG.provider || 'gitlab';
+  if (p === 'github') {
+    return (CFG.glUrl || 'https://api.github.com').replace(/\/$/, '');
+  }
+  return (CFG.glUrl || 'https://gitlab.com').replace(/\/$/, '') + '/api/v4';
+}
+
+function authHeaders() {
+  var p = CFG.provider || 'gitlab';
+  if (p === 'github') {
+    return { 'Authorization': 'Bearer ' + (CFG.pat || ''), 'Accept': 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', 'User-Agent': 'mr-reviewer-cowork-plugin/2.0.0' };
+  }
+  return { 'PRIVATE-TOKEN': CFG.pat || '' };
+}
+
+async function apiFetch(path, opts) {
+  opts = opts || {};
+  var controller = new AbortController();
+  var timer = setTimeout(function() { controller.abort(); }, API_TIMEOUT_MS);
+  try {
+    var headers = Object.assign(authHeaders(), opts.headers || {});
+    var res = await fetch(providerBase() + path, {
+      method: opts.method || 'GET',
+      headers: headers,
+      body: opts.body ? JSON.stringify(opts.body) : undefined,
+      signal: controller.signal,
+    });
+    if (!res.ok) {
+      var errText = await res.text().catch(function() { return ''; });
+      throw new Error((CFG.provider === 'github' ? 'GitHub' : 'GitLab') + ' ' + res.status + ': ' + errText.slice(0, 200));
+    }
+    var ct = res.headers.get('content-type') || '';
+    if (ct.indexOf('application/json') >= 0) return res.json();
+    return res.text();
+  } catch(e) {
+    if (e.name === 'AbortError') throw new Error('Request timed out after ' + (API_TIMEOUT_MS/1000) + 's');
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// Normalise a raw PR/MR from provider to common shape
+function normalisePR(raw) {
+  var p = CFG.provider || 'gitlab';
+  if (p === 'github') {
+    return {
+      id: raw.id,
+      iid: raw.number,
+      project_id: raw.base && raw.base.repo ? raw.base.repo.full_name : '',
+      title: raw.title,
+      description: raw.body || '',
+      state: raw.state,
+      source_branch: raw.head ? raw.head.ref : '',
+      target_branch: raw.base ? raw.base.ref : '',
+      web_url: raw.html_url,
+      sha: raw.head ? raw.head.sha : '',
+      author: raw.user ? { username: raw.user.login, name: raw.user.login } : {},
+      assignees: (raw.assignees || []).map(function(a) { return { username: a.login, name: a.login }; }),
+      reviewers: (raw.requested_reviewers || []).map(function(r) { return { username: r.login, name: r.login }; }),
+      labels: (raw.labels || []).map(function(l) { return l.name; }),
+      draft: !!raw.draft,
+      created_at: raw.created_at,
+      updated_at: raw.updated_at,
+      user_notes_count: 0,
+    };
+  }
+  // gitlab
+  return {
+    id: raw.id, iid: raw.iid, project_id: raw.project_id,
+    title: raw.title, description: raw.description, state: raw.state,
+    source_branch: raw.source_branch, target_branch: raw.target_branch,
+    web_url: raw.web_url, sha: raw.sha,
+    author: raw.author || {}, assignees: raw.assignees || [], reviewers: raw.reviewers || [],
+    labels: raw.labels || [], draft: !!(raw.work_in_progress || raw.draft),
+    created_at: raw.created_at, updated_at: raw.updated_at,
+    user_notes_count: raw.user_notes_count || 0,
+    references: raw.references,
+  };
+}
+
+async function mcpCall(tool, args) {
+  var p = CFG.provider || 'gitlab';
+  var pid = p === 'github' ? String(args.project_id || '') : encodeURIComponent(String(args.project_id || ''));
+
+  switch (tool) {
+    case 'list_merge_requests': {
+      var path = p === 'github'
+        ? '/repos/' + String(args.project_id || '') + '/pulls?state=open&per_page=' + (args.per_page || 100)
+        : '/projects/' + pid + '/merge_requests?state=opened&scope=all&per_page=' + (args.per_page || 100);
+      var raw = await apiFetch(path);
+      return Array.isArray(raw) ? raw.map(normalisePR) : raw;
+    }
+    case 'get_merge_request_diffs': {
+      var iid = Number(args.merge_request_iid);
+      if (p === 'github') {
+        return apiFetch('/repos/' + String(args.project_id || '') + '/pulls/' + iid + '/files?per_page=50');
+      }
+      try {
+        var d = await apiFetch('/projects/' + pid + '/merge_requests/' + iid + '/diffs?per_page=50');
+        if (Array.isArray(d) && d.length) return d;
+        throw new Error('empty');
+      } catch(_) {
+        var d2 = await apiFetch('/projects/' + pid + '/merge_requests/' + iid + '/changes');
+        return Array.isArray(d2) ? d2 : (d2 && d2.changes ? d2.changes : []);
+      }
+    }
+    case 'get_file_contents': {
+      if (p === 'github') {
+        var parts = String(args.project_id || '').split('/');
+        var owner = parts[0], repo = parts.slice(1).join('/');
+        var res = await apiFetch('/repos/' + owner + '/' + repo + '/contents/' + String(args.file_path) + (args.ref ? '?ref=' + encodeURIComponent(args.ref) : ''));
+        if (res && res.content) return atob(res.content.replace(/\n/g,''));
+        return typeof res === 'string' ? res : JSON.stringify(res);
+      }
+      return apiFetch('/projects/' + pid + '/repository/files/' + encodeURIComponent(String(args.file_path)) + '/raw?ref=' + encodeURIComponent(String(args.ref || 'HEAD')));
+    }
+    case 'create_merge_request_note': {
+      var niid = Number(args.merge_request_iid);
+      if (p === 'github') {
+        var parts2 = String(args.project_id || '').split('/');
+        return apiFetch('/repos/' + parts2[0] + '/' + parts2.slice(1).join('/') + '/issues/' + niid + '/comments', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: { body: String(args.body) } });
+      }
+      return apiFetch('/projects/' + pid + '/merge_requests/' + niid + '/notes', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: { body: String(args.body) } });
+    }
+    default:
+      throw new Error('Unknown tool: ' + tool);
+  }
+}
+
+// ── Per-MR state ──────────────────────────────────────────────────────
+function mrKey(mr)      { return 'mrst_' + mr.project_id + '_' + mr.iid; }
+function getRS(mr)      { return ls.get(mrKey(mr)) || {}; }
+function setRS(mr, d)   { ls.set(mrKey(mr), Object.assign(getRS(mr), d)); }
+
+// ── Fetch MRs ─────────────────────────────────────────────────────────
+async function fetchMRs() {
+  const projects = (CFG.projects || '').split(',').map(function(p) { return p.trim(); }).filter(Boolean);
+  if (!projects.length) throw new Error('No projects configured. Open Settings.');
+
+  const me = CFG.me;
+  const seen = new Set(), all = [], errors = [];
+
+  for (var i = 0; i < projects.length; i++) {
+    var project = projects[i];
+    try {
+      var mrs = await mcpCall('list_merge_requests', { project_id: project, per_page: 100 });
+      var items = Array.isArray(mrs) ? mrs : [];
+      for (var j = 0; j < items.length; j++) {
+        var mr = items[j];
+        var assigneeNames = ((mr.assignees || []).map(function(a) { return a.username; }))
+          .concat(mr.assignee ? [mr.assignee.username] : []).filter(Boolean);
+        var reviewerNames = (mr.reviewers || []).map(function(r) { return r.username; }).filter(Boolean);
+        var k = String(mr.project_id) + ':' + mr.iid;
+        if (seen.has(k)) continue;
+        seen.add(k);
+        var isA = me ? assigneeNames.indexOf(me) >= 0 : false;
+        var isR = me ? reviewerNames.indexOf(me) >= 0 : false;
+        if (me && !isA && !isR) continue;
+        mr._roles = [];
+        if (isA) mr._roles.push('assignee');
+        if (isR) mr._roles.push('reviewer');
+        all.push(mr);
+      }
+    } catch(e) {
+      errors.push(project + ':\n  ' + (e.message || String(e)));
+    }
+  }
+
+  if (errors.length && !all.length) throw new Error('Failed to load PRs/MRs:\n\n' + errors.join('\n\n'));
+  all.sort(function(a, b) { return new Date(b.updated_at) - new Date(a.updated_at); });
+  return all;
+}
+
+// ── Fetch diff ────────────────────────────────────────────────────────
+async function fetchDiff(mr) {
+  var ck = 'diff_' + mr.project_id + '_' + mr.iid + '_' + mr.sha;
+  var cached = ls.get(ck);
+  if (cached) return cached;
+
+  var changes = await mcpCall('get_merge_request_diffs', {
+    project_id: String(mr.project_id),
+    merge_request_iid: Number(mr.iid),
+    per_page: 50,
+  });
+  if (!Array.isArray(changes)) changes = [];
+
+  var diff = changes.slice(0, 25).map(function(f) {
+    var fp = f.new_path || f.filename || f.old_path || '';
+    var lines = (f.diff || f.patch || '').split('\n').slice(0, 120).join('\n');
+    return '### ' + fp + '\n' + lines;
+  }).join('\n\n');
+
+  ls.set(ck, diff);
+  return diff;
+}
+
+// ── Post note ─────────────────────────────────────────────────────────
+async function postNote(projectId, iid, body) {
+  return mcpCall('create_merge_request_note', {
+    project_id: String(projectId),
+    merge_request_iid: Number(iid),
+    body: body,
+  });
+}
+
+// ── Guidelines ────────────────────────────────────────────────────────
+function mrProjectPath(mr) {
+  if (mr.references && mr.references.full) return mr.references.full.replace(/![0-9]+$/, '').trim();
+  if (typeof mr.project_id === 'string' && mr.project_id.indexOf('/') >= 0) return mr.project_id;
+  try {
+    var m = new URL(mr.web_url).pathname.match(/^\/(.+?)\/-\/(merge_requests|pull)/);
+    if (m) return m[1];
+  } catch(_) {}
+  return String(mr.project_id);
+}
+
+function selectCommonFile(projectPath) {
+  var kws = (CFG.frontendKw || '').split(',').map(function(k) { return k.trim().toLowerCase(); }).filter(Boolean);
+  var p = projectPath.toLowerCase();
+  return (kws.length && kws.some(function(k) { return p.indexOf(k) >= 0; }))
+    ? 'AGENTS.frontend.md'
+    : 'AGENTS.backend.md';
+}
+
+async function fetchFile(idOrPath, filename) {
+  var ck = 'file_' + String(idOrPath).replace(/\//g, '_') + '_' + filename;
+  var cached = ls.get(ck);
+  if (cached && Date.now() - cached.ts < 3600000) return cached.content;
+  try {
+    var content = await mcpCall('get_file_contents', {
+      project_id: String(idOrPath),
+      file_path: filename,
+      ref: 'HEAD',
+    });
+    var text = typeof content === 'string' ? content : JSON.stringify(content);
+    ls.set(ck, { content: text, ts: Date.now() });
+    return text;
+  } catch(e) {
+    if (e.message && (e.message.indexOf('404') >= 0 || e.message.indexOf('Not Found') >= 0)) {
+      ls.set(ck, { content: null, ts: Date.now() });
+      return null;
+    }
+    throw e;
+  }
+}
+
+async function fetchAgentsFromProject(id) {
+  var candidates = ['AGENTS.md', 'agents.md', 'CLAUDE.md', '.claude/CLAUDE.md'];
+  for (var i = 0; i < candidates.length; i++) {
+    var c = await fetchFile(id, candidates[i]);
+    if (c !== null) return c;
+  }
+  return null;
+}
+
+function mergeAndDedup(common, repo) {
+  if (!common && !repo) return null;
+  if (!common) return repo;
+  if (!repo)   return common;
+  function norm(line) {
+    return line.replace(/^[\s#\-*>|\d.`]+/, '').toLowerCase().trim();
+  }
+  var seen = new Set(), result = [];
+  var lines1 = common.split('\n');
+  for (var i = 0; i < lines1.length; i++) {
+    var n = norm(lines1[i]);
+    if (n) seen.add(n);
+    result.push(lines1[i]);
+  }
+  var extra = [];
+  var lines2 = repo.split('\n');
+  for (var i = 0; i < lines2.length; i++) {
+    var n = norm(lines2[i]);
+    if (n && seen.has(n)) continue;
+    if (n) seen.add(n);
+    extra.push(lines2[i]);
+  }
+  while (extra.length && !extra[0].trim()) extra.shift();
+  if (extra.length) {
+    result.push('', '---', '', '**Project-specific guidelines:**', '');
+    for (var i = 0; i < extra.length; i++) result.push(extra[i]);
+  }
+  return result.join('\n');
+}
+
+async function fetchAgents(mr) {
+  var commonRepo = (CFG.commonRepo || '').trim();
+  var commonFile = commonRepo ? selectCommonFile(mrProjectPath(mr)) : null;
+  var results = await Promise.all([
+    fetchAgentsFromProject(mr.project_id),
+    commonFile ? fetchFile(commonRepo, commonFile) : Promise.resolve(null),
+  ]);
+  return mergeAndDedup(results[1], results[0]);
+}
+
+// ── AI Review (uses Claude subscription via window.cowork.askClaude) ──
+async function generateReview(mr, cardEl) {
+  var wrap = cardEl.querySelector('.review-wrap');
+  wrap.style.display = 'block';
+  var sid = 'gen-' + mr.project_id + '-' + mr.iid;
+  wrap.innerHTML = '<div class="review-label">&#10024; AI Review</div>' +
+    '<div class="generating"><div class="spinner"></div><span id="' + sid + '">Fetching diff&#8230;</span></div>';
+
+  function setStatus(msg) {
+    var el = document.getElementById(sid);
+    if (el) el.textContent = msg;
+  }
+
+  var prTerm = (CFG.provider === 'github') ? 'PR' : 'MR';
+
+  try {
+    setStatus('Fetching diff…');
+    var diffText = await fetchDiff(mr);
+    setStatus('Loading guidelines…');
+    var agents = await fetchAgents(mr);
+    setStatus('Running AI analysis…');
+
+    var agentsBlock = agents ? '\n\nProject Guidelines:\n' + agents.slice(0, 4000) : '';
+    var complianceSection = agents
+      ? '\n\n## Guideline Compliance\n(For each guideline above — confirm compliance or flag violations)'
+      : '';
+
+    var prompt = 'You are an expert code reviewer. Review this ' + prTerm + ' and give concise, actionable feedback.\n\n' +
+      prTerm + ' Title: ' + mr.title + '\n' +
+      'Description: ' + (mr.description || 'No description').slice(0, 600) + '\n' +
+      'Branch: ' + mr.source_branch + ' → ' + mr.target_branch + '\n' +
+      'Author: ' + (mr.author.name || mr.author.username || 'unknown') + '\n' +
+      'Files changed: ' + (mr.changes_count || '?') +
+      agentsBlock + '\n\n' +
+      'Review the diff below and respond in this exact format:\n\n' +
+      '## Summary\n(2–3 sentences: what this ' + prTerm + ' does and its overall quality)\n\n' +
+      '## Issues Found\n(Specific bugs, security concerns, logic errors, performance problems. If none, say "No significant issues found.")\n\n' +
+      '## Suggestions\n(Optional improvements — style, readability, test coverage)' +
+      complianceSection + '\n\nKeep it specific and actionable. Do not repeat the diff.';
+
+    var raw;
+    if (window.cowork && typeof window.cowork.askClaude === 'function') {
+      raw = await window.cowork.askClaude(prompt, [{ type: 'text', text: diffText }]);
+    } else {
+      throw new Error('AI review requires Cowork. Open this dashboard inside Claude Code with the Cowork session active.');
+    }
+    var reviewText = typeof raw === 'string' ? raw : ((raw && raw.content && raw.content[0]) ? raw.content[0].text : JSON.stringify(raw));
+
+    setRS(mr, { review: reviewText, generatedAt: Date.now() });
+    renderReviewSection(mr, cardEl, reviewText, false);
+    updateStats();
+
+  } catch(e) {
+    var pid = String(mr.project_id), iid = String(mr.iid);
+    wrap.innerHTML = '<div class="review-label">&#10024; AI Review</div>' +
+      '<div class="error-box" style="white-space:pre-wrap;font-family:monospace;font-size:12px">' + formatError(e) + '</div>' +
+      '<div style="margin-top:8px"><button class="btn btn-sm btn-purple" onclick="window._gen(\'' + pid + '\',\'' + iid + '\')">&#8635; Retry</button></div>';
+  }
+}
+
+window._gen = function(pid, iid) {
+  var mr = findMR(pid, iid), card = getCard(pid, iid);
+  if (mr && card) generateReview(mr, card);
+};
+
+// ── Render review section ─────────────────────────────────────────────
+function renderReviewSection(mr, cardEl, text, editing) {
+  var st = getRS(mr), pid = String(mr.project_id), iid = String(mr.iid);
+  var posted = !!st.posted, approved = !!st.approved, rejected = !!st.rejected;
+  var wrap = cardEl.querySelector('.review-wrap');
+  wrap.style.display = 'block';
+
+  var providerLabel = (CFG.provider === 'github') ? 'GitHub' : 'GitLab';
+
+  var statusBadge = posted   ? '<span class="badge badge-posted">&#10003; Posted</span>'
+                  : approved ? '<span class="badge badge-approved">&#10003; Approved</span>'
+                  : rejected ? '<span class="badge badge-rejected">&#10007; Rejected</span>'
+                  : '';
+
+  if (editing) {
+    wrap.innerHTML = '<div class="review-label">&#10024; AI Review &mdash; Editing</div>' +
+      '<textarea class="review-editor" id="ed-' + pid + '-' + iid + '">' + esc(text) + '</textarea>' +
+      '<div class="review-actions">' +
+        '<button class="btn btn-sm btn-primary" onclick="window._save(\'' + pid + '\',\'' + iid + '\')">Save</button>' +
+        '<button class="btn btn-sm" onclick="window._cancel(\'' + pid + '\',\'' + iid + '\')">Cancel</button>' +
+      '</div>';
+    return;
+  }
+
+  var canPost = (approved || rejected) && !posted;
+  wrap.innerHTML = '<div class="review-label">&#10024; AI Review ' + statusBadge + '</div>' +
+    '<div class="review-text">' + esc(text) + '</div>' +
+    '<div class="review-actions">' +
+      (!posted ? '<button class="btn btn-sm" onclick="window._edit(\'' + pid + '\',\'' + iid + '\')">&#9998; Edit</button>' : '') +
+      (!posted ? (
+        '<button class="btn btn-sm btn-green" onclick="window._approve(\'' + pid + '\',\'' + iid + '\')">' + (approved ? '&#10003; Approved' : '&#10003; Approve') + '</button>' +
+        '<button class="btn btn-sm btn-red"   onclick="window._reject(\'' + pid + '\',\'' + iid + '\')">' + (rejected ? '&#10007; Rejected' : '&#10007; Reject') + '</button>' +
+        '<button class="btn btn-sm btn-primary" id="post-' + pid + '-' + iid + '" ' + (canPost ? '' : 'disabled title="Approve or reject first"') + ' onclick="window._post(\'' + pid + '\',\'' + iid + '\')">&#8593; Post to ' + providerLabel + '</button>'
+      ) : '') +
+      (posted ? '<span style="font-size:12px;color:var(--text-muted)">&#10003; Comment posted on ' + providerLabel + '</span>' : '') +
+      '<button class="btn btn-sm btn-purple" onclick="window._gen(\'' + pid + '\',\'' + iid + '\')">&#8635; Re-gen</button>' +
+    '</div>';
+}
+
+window._edit   = function(pid, iid) { var mr = findMR(pid,iid), c = getCard(pid,iid); renderReviewSection(mr, c, getRS(mr).review, true); };
+window._cancel = function(pid, iid) { var mr = findMR(pid,iid), c = getCard(pid,iid); renderReviewSection(mr, c, getRS(mr).review, false); };
+window._save   = function(pid, iid) {
+  var mr = findMR(pid,iid), c = getCard(pid,iid);
+  var t = document.getElementById('ed-' + pid + '-' + iid).value;
+  setRS(mr, { review: t }); renderReviewSection(mr, c, t, false);
+};
+window._approve = function(pid, iid) {
+  var mr = findMR(pid,iid), c = getCard(pid,iid), st = getRS(mr), v = !st.approved;
+  setRS(mr, { approved: v, rejected: false });
+  c.className = 'mr-card' + (v ? ' card-approved' : '');
+  renderReviewSection(mr, c, st.review, false); updateStats();
+};
+window._reject = function(pid, iid) {
+  var mr = findMR(pid,iid), c = getCard(pid,iid), st = getRS(mr), v = !st.rejected;
+  setRS(mr, { rejected: v, approved: false });
+  c.className = 'mr-card' + (v ? ' card-rejected' : '');
+  renderReviewSection(mr, c, st.review, false); updateStats();
+};
+window._post = async function(pid, iid) {
+  var mr = findMR(pid,iid), c = getCard(pid,iid);
+  var btn = document.getElementById('post-' + pid + '-' + iid);
+  if (!btn) return;
+  btn.disabled = true; btn.textContent = 'Posting…';
+  var st = getRS(mr);
+  try {
+    var prefix = st.approved ? '✅ **AI Code Review — Approved**\n\n' : '❌ **AI Code Review — Changes Requested**\n\n';
+    await postNote(pid, iid, prefix + st.review);
+    setRS(mr, { posted: true }); c.className = 'mr-card card-posted';
+    renderReviewSection(mr, c, st.review, false); updateStats();
+  } catch(e) {
+    btn.disabled = false;
+    var providerLabel = (CFG.provider === 'github') ? 'GitHub' : 'GitLab';
+    btn.textContent = '↑ Post to ' + providerLabel;
+    var d = document.createElement('div');
+    d.className = 'error-box';
+    d.style.cssText = 'margin-top:8px;white-space:pre-wrap;font-family:monospace;font-size:12px';
+    d.innerHTML = formatError(e);
+    btn.closest('.review-actions').after(d);
+    setTimeout(function() { d.remove(); }, 10000);
+  }
+};
+
+// ── Card render ───────────────────────────────────────────────────────
+function renderCard(mr) {
+  var st = getRS(mr), pid = String(mr.project_id), iid = String(mr.iid), roles = mr._roles || [];
+  var cls = 'mr-card';
+  if (st.posted) cls += ' card-posted';
+  else if (st.approved) cls += ' card-approved';
+  else if (st.rejected) cls += ' card-rejected';
+  var ref = (mr.references && mr.references.full) ? mr.references.full : ('project/' + pid);
+  var proj = ref.split('!')[0] || String(mr.project_id);
+  var prTerm = (CFG.provider === 'github') ? '#' : '!';
+  var providerLabel = (CFG.provider === 'github') ? 'GitHub' : 'GitLab';
+  var card = document.createElement('div');
+  card.className = cls; card.id = 'card-' + pid + '-' + iid;
+  card.innerHTML =
+    '<div class="card-top">' +
+      '<a class="mr-title-link" href="' + mr.web_url + '" target="_blank">' + prTerm + iid + ' ' + esc(mr.title) + '</a>' +
+      '<div class="mr-meta">' +
+        '<span>' + esc(String(mr.project_id)) + '</span><span>&middot;</span>' +
+        '<code style="font-size:11px">' + esc(mr.source_branch) + '</code><span>&middot;</span>' +
+        '<span>by ' + esc(mr.author.name || mr.author.username || 'unknown') + '</span><span>&middot;</span>' +
+        '<span>' + timeAgo(mr.updated_at) + '</span>' +
+        (roles.indexOf('assignee') >= 0 ? '<span class="badge badge-assignee">Assignee</span>' : '') +
+        (roles.indexOf('reviewer') >= 0 ? '<span class="badge badge-reviewer">Reviewer</span>' : '') +
+        (st.posted ? '<span class="badge badge-posted">&#10003; Posted</span>' : '') +
+      '</div>' +
+    '</div>' +
+    '<div class="card-actions">' +
+      (st.review
+        ? '<button class="btn btn-sm btn-purple" onclick="window._toggleReview(\'' + pid + '\',\'' + iid + '\')">&#9650; Hide Review</button>' +
+          '<button class="btn btn-sm" onclick="window._gen(\'' + pid + '\',\'' + iid + '\')">&#8635; Re-generate</button>'
+        : '<button class="btn btn-sm btn-purple" onclick="window._gen(\'' + pid + '\',\'' + iid + '\')">&#10024; Generate AI Review</button>'
+      ) +
+      '<a class="btn btn-sm" href="' + mr.web_url + '" target="_blank">Open in ' + providerLabel + ' &#8599;</a>' +
+    '</div>' +
+    '<div class="review-wrap" style="display:' + (st.review && st._expanded !== false ? 'block' : 'none') + '"></div>';
+  if (st.review && st._expanded !== false) renderReviewSection(mr, card, st.review, false);
+  return card;
+}
+
+window._toggleReview = function(pid, iid) {
+  var mr = findMR(pid,iid), c = getCard(pid,iid), w = c.querySelector('.review-wrap'), st = getRS(mr);
+  var show = w.style.display === 'none';
+  w.style.display = show ? 'block' : 'none';
+  if (show && !w.innerHTML.trim()) renderReviewSection(mr, c, st.review, false);
+  setRS(mr, { _expanded: show });
+  var btn = c.querySelector('.card-actions .btn-purple');
+  if (btn) btn.textContent = show ? '▲ Hide Review' : '▼ Show Review';
+};
+
+// ── List ──────────────────────────────────────────────────────────────
+function renderList(mrs) {
+  var list = document.getElementById('mr-list'); list.innerHTML = '';
+  var filtered = applyFilter(mrs, activeFilter);
+  if (!filtered.length) {
+    list.innerHTML = '<div class="empty-state"><div class="emoji">&#x1F389;</div>' +
+      '<div style="font-weight:600;margin-bottom:4px">No PRs/MRs here</div>' +
+      '<div>' + (activeFilter === 'all' ? 'No open PRs/MRs in the configured projects.' : 'Try a different filter.') + '</div></div>';
+    return;
+  }
+  filtered.forEach(function(mr) { list.appendChild(renderCard(mr)); });
+}
+
+function applyFilter(mrs, f) {
+  if (f === 'all')      return mrs;
+  if (f === 'assignee') return mrs.filter(function(m) { return m._roles && m._roles.indexOf('assignee') >= 0; });
+  if (f === 'reviewer') return mrs.filter(function(m) { return m._roles && m._roles.indexOf('reviewer') >= 0; });
+  if (f === 'pending')  return mrs.filter(function(m) { return !getRS(m).review; });
+  return mrs;
+}
+
+function updateStats() {
+  document.getElementById('st-total').textContent    = MRS.length;
+  document.getElementById('st-reviewed').textContent = MRS.filter(function(m) { return getRS(m).review; }).length;
+  document.getElementById('st-posted').textContent   = MRS.filter(function(m) { return getRS(m).posted; }).length;
+}
+
+// ── Utils ─────────────────────────────────────────────────────────────
+function findMR(pid, iid)  { return MRS.find(function(m) { return String(m.project_id) === pid && String(m.iid) === iid; }); }
+function getCard(pid, iid) { return document.getElementById('card-' + pid + '-' + iid); }
+function esc(s) {
+  return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+function formatError(e) {
+  return '<strong>Error</strong><br><br>' + esc(e && e.message ? e.message : String(e)).replace(/\n/g,'<br>');
+}
+function timeAgo(iso) {
+  var s = Math.floor((Date.now() - new Date(iso)) / 1000);
+  if (s < 60)    return 'just now';
+  if (s < 3600)  return Math.floor(s / 60)   + 'm ago';
+  if (s < 86400) return Math.floor(s / 3600)  + 'h ago';
+  return Math.floor(s / 86400) + 'd ago';
+}
+
+// ── Provider tab logic ────────────────────────────────────────────────
+var selectedProvider = CFG.provider || 'gitlab';
+
+function applyProviderLabels(provider) {
+  if (provider === 'github') {
+    document.getElementById('lbl-api-url').innerHTML = 'GitHub URL <span style="color:var(--red)">*</span>';
+    document.getElementById('cfg-gl-url').placeholder = 'https://api.github.com';
+    document.getElementById('hint-api-url').textContent = 'Use https://api.github.com for GitHub.com, or your GitHub Enterprise URL.';
+    document.getElementById('lbl-pat').innerHTML = 'Personal Access Token <span style="color:var(--red)">*</span>';
+    document.getElementById('cfg-pat').placeholder = 'ghp_...';
+    document.getElementById('hint-pat').textContent = 'GitHub → Settings → Developer Settings → Personal access tokens → scope: repo';
+  } else {
+    document.getElementById('lbl-api-url').innerHTML = 'GitLab URL <span style="color:var(--red)">*</span>';
+    document.getElementById('cfg-gl-url').placeholder = 'https://gitlab.com';
+    document.getElementById('hint-api-url').textContent = 'Your GitLab instance URL. Use https://gitlab.com for GitLab.com.';
+    document.getElementById('lbl-pat').innerHTML = 'Personal Access Token <span style="color:var(--red)">*</span>';
+    document.getElementById('cfg-pat').placeholder = 'glpat-...';
+    document.getElementById('hint-pat').textContent = 'GitLab → User Settings → Access Tokens → scope: api';
+  }
+}
+
+document.querySelectorAll('.provider-tab').forEach(function(btn) {
+  btn.addEventListener('click', function() {
+    selectedProvider = btn.dataset.provider;
+    document.querySelectorAll('.provider-tab').forEach(function(b) { b.classList.remove('active'); });
+    btn.classList.add('active');
+    applyProviderLabels(selectedProvider);
+  });
+});
+
+// Restore active tab on load
+if (selectedProvider === 'github') {
+  var githubTab = document.querySelector('[data-provider="github"]');
+  if (githubTab) { githubTab.classList.add('active'); document.querySelector('[data-provider="gitlab"]').classList.remove('active'); }
+  applyProviderLabels('github');
+}
+
+// ── Init ──────────────────────────────────────────────────────────────
+async function init() {
+  var btn = document.getElementById('btn-connect');
+  function resetBtn() { if (btn) { btn.disabled = false; btn.textContent = 'Connect & Load Reviews'; } }
+
+  if (!CFG.projects) { resetBtn(); showSetup(); return; }
+
+  document.getElementById('setup').style.display      = 'none';
+  document.getElementById('app').style.display        = 'block';
+  document.getElementById('loading-state').style.display = 'flex';
+  document.getElementById('mr-list').style.display       = 'none';
+  document.getElementById('err-area').innerHTML           = '';
+
+  try {
+    document.getElementById('user-chip').textContent = '@' + (CFG.me || 'all');
+    MRS = await fetchMRs();
+    resetBtn();
+    document.getElementById('loading-state').style.display = 'none';
+    document.getElementById('mr-list').style.display       = 'block';
+    document.getElementById('sync-label').textContent      = 'Updated ' + new Date().toLocaleTimeString();
+    renderList(MRS); updateStats();
+  } catch(e) {
+    resetBtn();
+    document.getElementById('loading-state').style.display = 'none';
+    document.getElementById('mr-list').style.display       = 'block';
+    document.getElementById('err-area').innerHTML =
+      '<div class="error-box" style="white-space:pre-wrap;font-family:monospace;font-size:12px">' + formatError(e) +
+      '<div style="margin-top:10px;font-family:sans-serif">' +
+        '<button class="btn btn-sm" onclick="init()">&#8635; Retry</button>' +
+        '<button class="btn btn-sm" style="margin-left:6px" onclick="showSetup()">&#9881; Settings</button>' +
+      '</div></div>';
+  }
+}
+
+function showSetup() {
+  document.getElementById('setup').style.display = 'block';
+  document.getElementById('app').style.display   = 'none';
+  if (CFG.glUrl)      document.getElementById('cfg-gl-url').value      = CFG.glUrl;
+  if (CFG.pat)        document.getElementById('cfg-pat').value         = CFG.pat;
+  if (CFG.me)         document.getElementById('cfg-me').value          = CFG.me;
+  if (CFG.projects)   document.getElementById('cfg-projects').value    = CFG.projects;
+  if (CFG.commonRepo) document.getElementById('cfg-common-repo').value = CFG.commonRepo;
+  if (CFG.frontendKw) document.getElementById('cfg-frontend-kw').value = CFG.frontendKw;
+
+  // Restore provider tab
+  if (CFG.provider) {
+    selectedProvider = CFG.provider;
+    document.querySelectorAll('.provider-tab').forEach(function(b) { b.classList.remove('active'); });
+    var activeTab = document.querySelector('[data-provider="' + CFG.provider + '"]');
+    if (activeTab) activeTab.classList.add('active');
+    applyProviderLabels(CFG.provider);
+  }
+
+  // Merge in org-level defaults from server (only fill blanks)
+  fetch(API_BASE + '/api/config').then(function(r) { return r.json(); }).then(function(org) {
+    if (!CFG.glUrl      && org.glUrl)      document.getElementById('cfg-gl-url').value      = org.glUrl;
+    if (!CFG.projects   && org.projects)   document.getElementById('cfg-projects').value    = org.projects;
+    if (!CFG.commonRepo && org.commonRepo) document.getElementById('cfg-common-repo').value = org.commonRepo;
+    if (!CFG.frontendKw && org.frontendKw) document.getElementById('cfg-frontend-kw').value = org.frontendKw;
+    if (org.commonRepo) document.getElementById('field-keywords').style.display = 'block';
+  }).catch(function() {});
+  document.getElementById('field-keywords').style.display = CFG.commonRepo ? 'block' : 'none';
+}
+
+// ── Events ────────────────────────────────────────────────────────────
+document.getElementById('btn-connect').addEventListener('click', async function() {
+  var btn = document.getElementById('btn-connect'), errEl = document.getElementById('setup-err');
+  btn.textContent = '⧓ Connecting…'; btn.disabled = true; errEl.style.display = 'none';
+  try {
+    var glUrl      = (document.getElementById('cfg-gl-url').value.trim() || (selectedProvider === 'github' ? 'https://api.github.com' : 'https://gitlab.com')).replace(/\/$/, '');
+    var pat        = document.getElementById('cfg-pat').value.trim();
+    var me         = document.getElementById('cfg-me').value.trim();
+    var projects   = document.getElementById('cfg-projects').value.trim();
+    var commonRepo = document.getElementById('cfg-common-repo').value.trim();
+    var frontendKw = document.getElementById('cfg-frontend-kw').value.trim();
+    if (!pat) {
+      btn.disabled = false; btn.textContent = 'Connect & Load Reviews';
+      errEl.innerHTML = formatError(new Error('Please enter your Personal Access Token.'));
+      errEl.style.display = 'block'; return;
+    }
+    if (!projects) {
+      btn.disabled = false; btn.textContent = 'Connect & Load Reviews';
+      errEl.innerHTML = formatError(new Error('Please enter at least one project path.'));
+      errEl.style.display = 'block'; return;
+    }
+    CFG = { provider: selectedProvider, glUrl: glUrl, pat: pat, me: me, projects: projects, commonRepo: commonRepo, frontendKw: frontendKw };
+    ls.set('mr_cfg', CFG);
+    // Persist org defaults back to server config (excludes PAT for security)
+    fetch(API_BASE + '/api/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ provider: selectedProvider, projects: projects, commonRepo: commonRepo, frontendKw: frontendKw, glUrl: glUrl, apiUrl: glUrl }),
+    }).catch(function() {});
+    await init();
+  } catch(e) {
+    btn.disabled = false; btn.textContent = 'Connect & Load Reviews';
+    errEl.innerHTML = formatError(e); errEl.style.display = 'block';
+  }
+});
+
+document.getElementById('cfg-common-repo').addEventListener('input', function(e) {
+  document.getElementById('field-keywords').style.display = e.target.value.trim() ? 'block' : 'none';
+});
+document.getElementById('btn-refresh').addEventListener('click', function() { init(); });
+document.getElementById('btn-settings').addEventListener('click', function() { showSetup(); });
+document.querySelectorAll('.tab').forEach(function(tab) {
+  tab.addEventListener('click', function() {
+    document.querySelectorAll('.tab').forEach(function(t) { t.classList.remove('active'); });
+    tab.classList.add('active'); activeFilter = tab.dataset.f; renderList(MRS);
+  });
+});
+
+init();
+</script>
+</body>
+</html>

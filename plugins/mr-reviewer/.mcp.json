@@ -1,0 +1,18 @@
+{
+  "mcpServers": {
+    "mr-reviewer": {
+      "command": "node",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/servers/mcp-server.js"],
+      "env": {
+        "GITLAB_PERSONAL_ACCESS_TOKEN": "${GITLAB_PERSONAL_ACCESS_TOKEN}",
+        "GITLAB_API_URL": "${GITLAB_API_URL}",
+        "GITHUB_TOKEN": "${GITHUB_TOKEN}",
+        "MCP_HTTP_PORT": "7842"
+      }
+    },
+    "mr-reviewer-http": {
+      "type": "http",
+      "url": "http://localhost:7842/mcp"
+    }
+  }
+}

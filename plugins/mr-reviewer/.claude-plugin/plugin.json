@@ -1,0 +1,7 @@
+{
+  "name": "mr-reviewer",
+  "version": "2.0.0",
+  "description": "AI-powered PR/MR review assistant for GitLab and GitHub. Generates structured code reviews against your team guidelines, posts reviews as comments, and supports daily scheduled reviews.",
+  "author": { "name": "community" },
+  "keywords": ["gitlab", "github", "pull-request", "merge-request", "code-review", "ai", "guidelines"]
+}
