@@ -16,7 +16,11 @@ const providers = {
 const HTTP_PORT      = parseInt(process.env.MCP_HTTP_PORT || '7842', 10);
 const CONFIG_FILE    = require('os').homedir() + '/.mr-reviewer-config.json';
 const GUIDELINES_CACHE = require('os').homedir() + '/.mr-reviewer-guidelines.json';
+const DRAFTS_FILE    = require('os').homedir() + '/.mr-reviewer-drafts.json';
 const STATIC         = path.join(__dirname, 'dashboard.html');
+
+// SSE clients connected to /api/reviews/stream
+const sseClients = new Set();
 
 function readConfig() {
   try { return JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8')); } catch(_) { return {}; }
@@ -61,6 +65,8 @@ const TOOLS = [
   { name: 'create_merge_request_note', description: 'Post a comment on a PR/MR',       inputSchema: { type: 'object', properties: { project_id: { type: 'string' }, merge_request_iid: { type: 'number' }, body: { type: 'string' } }, required: ['project_id', 'merge_request_iid', 'body'] } },
   { name: 'get_file_contents',         description: 'Get a file from a repo',           inputSchema: { type: 'object', properties: { project_id: { type: 'string' }, file_path: { type: 'string' }, ref: { type: 'string' } }, required: ['project_id', 'file_path'] } },
   { name: 'get_guidelines',            description: 'Fetch, merge and cache coding guidelines. Auto-selects frontend/backend rules based on project name and changed file paths. Merges with project CLAUDE.md, deduplicates by section heading (project-specific wins).', inputSchema: { type: 'object', properties: { guidelines_repo: { type: 'string' }, project_id: { type: 'string' }, file_paths: { type: 'array', items: { type: 'string' } }, frontend_keywords: { type: 'string' }, force: { type: 'boolean' } }, required: [] } },
+  { name: 'save_review',               description: 'Save a generated review as a draft so it appears in the web dashboard. Call this after generating a review to make it visible at localhost:7842.', inputSchema: { type: 'object', properties: { project_id: { type: 'string' }, merge_request_iid: { type: 'number' }, title: { type: 'string' }, review: { type: 'string' } }, required: ['project_id', 'merge_request_iid', 'review'] } },
+  { name: 'get_saved_reviews',         description: 'Get all saved draft reviews from the web dashboard store.', inputSchema: { type: 'object', properties: {}, required: [] } },
 ];
 
 async function callTool(name, args) {
@@ -196,6 +202,20 @@ async function callTool(name, args) {
       try { fs.writeFileSync(GUIDELINES_CACHE, JSON.stringify(result)); } catch(_) {}
       return result;
     }
+    case 'save_review': {
+      const drafts = (() => { try { return JSON.parse(fs.readFileSync(DRAFTS_FILE, 'utf8')); } catch(_) { return {}; } })();
+      const key = String(args.project_id) + '!' + String(args.merge_request_iid);
+      const draft = { project_id: args.project_id, iid: args.merge_request_iid, title: args.title || '', review: args.review, generatedAt: Date.now() };
+      drafts[key] = draft;
+      fs.writeFileSync(DRAFTS_FILE, JSON.stringify(drafts, null, 2));
+      // Push to any open dashboard tabs instantly
+      const event = 'data: ' + JSON.stringify({ type: 'review_saved', key, draft }) + '\n\n';
+      sseClients.forEach(function(c) { try { c.write(event); } catch(_) { sseClients.delete(c); } });
+      return { ok: true, key, message: 'Review saved — dashboard updated live at localhost:7842.' };
+    }
+    case 'get_saved_reviews': {
+      try { return JSON.parse(fs.readFileSync(DRAFTS_FILE, 'utf8')); } catch(_) { return {}; }
+    }
     default: throw new Error('Unknown tool: ' + name);
   }
 }
@@ -307,6 +327,46 @@ function startHttpServer() {
         const b = JSON.parse(await readBody(req));
         const data = await getProvider().postComment(getApiBase(), getPAT(), b.project || '', Number(b.iid), String(b.body));
         return j(res, data);
+      } catch (e) { return j(res, { error: e.message }, 500); }
+    }
+
+    // SSE stream — dashboard subscribes here to receive live review updates
+    if (req.method === 'GET' && pathname === '/api/reviews/stream') {
+      res.writeHead(200, {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive',
+        'Access-Control-Allow-Origin': '*',
+      });
+      res.write(': connected\n\n');
+      sseClients.add(res);
+      req.on('close', function() { sseClients.delete(res); });
+      return;
+    }
+
+    // Drafts — read all saved reviews
+    if (req.method === 'GET' && pathname === '/api/drafts') {
+      try {
+        const drafts = JSON.parse(fs.readFileSync(DRAFTS_FILE, 'utf8'));
+        return j(res, drafts);
+      } catch(_) { return j(res, {}); }
+    }
+    // Drafts — save/update a review for a specific MR
+    if (req.method === 'POST' && pathname === '/api/drafts') {
+      try {
+        const b = JSON.parse(await readBody(req));
+        const drafts = (() => { try { return JSON.parse(fs.readFileSync(DRAFTS_FILE, 'utf8')); } catch(_) { return {}; } })();
+        const key = String(b.project_id) + '!' + String(b.iid);
+        if (b.delete) {
+          delete drafts[key];
+        } else {
+          drafts[key] = { project_id: b.project_id, iid: b.iid, review: b.review, title: b.title || '', generatedAt: Date.now() };
+        }
+        fs.writeFileSync(DRAFTS_FILE, JSON.stringify(drafts, null, 2));
+        // Broadcast to all connected dashboard tabs
+        const event = 'data: ' + JSON.stringify({ type: 'review_saved', key, draft: drafts[key] || null }) + '\n\n';
+        sseClients.forEach(function(c) { try { c.write(event); } catch(_) { sseClients.delete(c); } });
+        return j(res, { ok: true });
       } catch (e) { return j(res, { error: e.message }, 500); }
     }
 

@@ -84,7 +84,17 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; b
 
 .review-wrap { border-top: 1px solid var(--border); padding: 12px 14px; background: #fafbfc; }
 .review-label { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; color: var(--text-muted); margin-bottom: 8px; }
-.review-text { font-size: 13px; line-height: 1.65; white-space: pre-wrap; background: white; border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px; max-height: 320px; overflow-y: auto; }
+.review-text { font-size: 13px; line-height: 1.65; background: white; border: 1px solid var(--border); border-radius: 6px; padding: 10px 16px; max-height: 420px; overflow-y: auto; }
+.review-text h2 { font-size: 13px; font-weight: 700; margin: 14px 0 6px; padding-bottom: 4px; border-bottom: 1px solid var(--border); }
+.review-text h3 { font-size: 13px; font-weight: 600; margin: 10px 0 4px; }
+.review-text p  { margin: 0 0 8px; }
+.review-text ul, .review-text ol { margin: 0 0 8px; padding-left: 20px; }
+.review-text li { margin-bottom: 3px; }
+.review-text code { font-family: ui-monospace, monospace; font-size: 12px; background: #f3f4f6; border-radius: 3px; padding: 1px 4px; }
+.review-text pre { background: #f3f4f6; border-radius: 6px; padding: 10px 12px; overflow-x: auto; margin: 0 0 10px; }
+.review-text pre code { background: none; padding: 0; font-size: 12px; }
+.review-text strong { font-weight: 600; }
+.review-text blockquote { border-left: 3px solid var(--border); margin: 0 0 8px; padding: 2px 12px; color: var(--text-muted); }
 .review-editor { width: 100%; min-height: 180px; font-size: 13px; line-height: 1.65; padding: 10px 12px; border: 1px solid var(--accent); border-radius: 6px; resize: vertical; font-family: inherit; outline: none; }
 .review-actions { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; align-items: center; }
 
@@ -97,6 +107,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; b
 .empty-state { text-align: center; padding: 48px 20px; color: var(--text-muted); }
 .empty-state .emoji { font-size: 40px; margin-bottom: 10px; }
 </style>
+<script src="https://cdn.jsdelivr.net/npm/marked@9/marked.min.js"></script>
 </head>
 <body>
 
@@ -500,8 +511,12 @@ function renderReviewSection(mr, cardEl, text, editing) {
   }
 
   var canPost = (approved || rejected) && !posted;
+  // Render markdown if available, fallback to escaped text
+  var renderedHtml = (typeof marked !== 'undefined')
+    ? marked.parse(text || '')
+    : '<pre style="white-space:pre-wrap">' + esc(text) + '</pre>';
   wrap.innerHTML = '<div class="review-label">&#10024; AI Review ' + statusBadge + '</div>' +
-    '<div class="review-text">' + esc(text) + '</div>' +
+    '<div class="review-text">' + renderedHtml + '</div>' +
     '<div class="review-actions">' +
       (!posted ? '<button class="btn btn-sm" onclick="window._edit(\'' + pid + '\',\'' + iid + '\')">&#9998; Edit</button>' : '') +
       (!posted ? (
@@ -681,6 +696,64 @@ if (selectedProvider === 'github') {
   applyProviderLabels('github');
 }
 
+// ── Live review stream (SSE) ──────────────────────────────────────────
+var _sseSource = null;
+function startReviewStream() {
+  if (_sseSource) { _sseSource.close(); }
+  try {
+    _sseSource = new EventSource(API_BASE + '/api/reviews/stream');
+    _sseSource.onmessage = function(e) {
+      if (!e.data || e.data === ': connected') return;
+      try {
+        var msg = JSON.parse(e.data);
+        if (msg.type === 'review_saved' && msg.draft) {
+          var d = msg.draft;
+          var mr = MRS.find(function(m) {
+            return String(m.project_id) === String(d.project_id) && String(m.iid) === String(d.iid);
+          });
+          if (mr) {
+            setRS(mr, { review: d.review, generatedAt: d.generatedAt });
+            var card = getCard(String(d.project_id), String(d.iid));
+            if (card) renderReviewSection(mr, card, d.review, false);
+            updateStats();
+            // Flash the sync label to show live update
+            var lbl = document.getElementById('sync-label');
+            if (lbl) { lbl.textContent = '⚡ Review received — ' + new Date().toLocaleTimeString(); }
+          }
+        }
+      } catch(_) {}
+    };
+    _sseSource.onerror = function() {
+      // Reconnect silently after 5s if connection drops
+      setTimeout(startReviewStream, 5000);
+    };
+  } catch(_) {}
+}
+
+// Manual refresh — re-fetches both MRs and drafts
+async function refreshDrafts() {
+  try {
+    var lbl = document.getElementById('sync-label');
+    if (lbl) lbl.textContent = 'Refreshing…';
+    var drafts = await serverFetch(API_BASE + '/api/drafts').catch(function() { return {}; });
+    Object.keys(drafts).forEach(function(key) {
+      var d = drafts[key];
+      if (!d || !d.review) return;
+      var mr = MRS.find(function(m) { return String(m.project_id) === String(d.project_id) && String(m.iid) === String(d.iid); });
+      if (mr) {
+        var existing = getRS(mr);
+        if (!existing.review || (d.generatedAt && d.generatedAt > (existing.generatedAt || 0))) {
+          setRS(mr, { review: d.review, generatedAt: d.generatedAt });
+          var card = getCard(String(d.project_id), String(d.iid));
+          if (card) renderReviewSection(mr, card, d.review, false);
+        }
+      }
+    });
+    updateStats();
+    if (lbl) lbl.textContent = 'Updated ' + new Date().toLocaleTimeString();
+  } catch(_) {}
+}
+
 // ── Init ──────────────────────────────────────────────────────────────
 async function init() {
   var btn = document.getElementById('btn-connect');
@@ -696,12 +769,37 @@ async function init() {
 
   try {
     document.getElementById('user-chip').textContent = '@' + (CFG.me || 'all');
-    MRS = await fetchMRs();
+    // Load MRs and saved draft reviews in parallel
+    var results = await Promise.all([
+      fetchMRs(),
+      serverFetch(API_BASE + '/api/drafts').catch(function() { return {}; }),
+    ]);
+    MRS = results[0];
+    var drafts = results[1] || {};
+
+    // Merge drafts into localStorage state so they show on MR cards
+    Object.keys(drafts).forEach(function(key) {
+      var d = drafts[key];
+      if (d && d.review) {
+        var mr = MRS.find(function(m) { return String(m.project_id) === String(d.project_id) && String(m.iid) === String(d.iid); });
+        if (mr) {
+          var existing = getRS(mr);
+          // Only update if we don't already have a local version newer than the draft
+          if (!existing.review || (d.generatedAt && (!existing.generatedAt || d.generatedAt > existing.generatedAt))) {
+            setRS(mr, { review: d.review, generatedAt: d.generatedAt });
+          }
+        }
+      }
+    });
+
     resetBtn();
     document.getElementById('loading-state').style.display = 'none';
     document.getElementById('mr-list').style.display       = 'block';
     document.getElementById('sync-label').textContent      = 'Updated ' + new Date().toLocaleTimeString();
     renderList(MRS); updateStats();
+
+    // SSE — auto-update dashboard when Claude saves a review
+    startReviewStream();
   } catch(e) {
     resetBtn();
     document.getElementById('loading-state').style.display = 'none';
@@ -782,7 +880,10 @@ document.getElementById('btn-connect').addEventListener('click', async function(
 document.getElementById('cfg-common-repo').addEventListener('input', function(e) {
   document.getElementById('field-keywords').style.display = e.target.value.trim() ? 'block' : 'none';
 });
-document.getElementById('btn-refresh').addEventListener('click', function() { init(); });
+document.getElementById('btn-refresh').addEventListener('click', function() {
+  // Shift+click = full reload (MRs + drafts), plain click = drafts only
+  if (event && event.shiftKey) { init(); } else { refreshDrafts(); }
+});
 document.getElementById('btn-settings').addEventListener('click', function() { showSetup(); });
 document.querySelectorAll('.tab').forEach(function(tab) {
   tab.addEventListener('click', function() {
