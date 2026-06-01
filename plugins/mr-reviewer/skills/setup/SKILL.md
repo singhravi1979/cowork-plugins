@@ -10,7 +10,9 @@ Guide the user through setting up the mr-reviewer plugin.
 **GitLab:** GitLab → User Settings → Access Tokens → create token with `api` scope.
 **GitHub:** GitHub → Settings → Developer Settings → Personal Access Tokens → create token with `repo` scope.
 
-## Step 2 — Save the token
+## Step 2 — Save the token to a file
+
+The token is stored securely in a local file — it never appears in the web dashboard.
 
 ```bash
 echo "your-token-here" > ~/.mr-reviewer-pat
@@ -24,13 +26,13 @@ Fully quit and reopen Cowork so the plugin picks up the token.
 ## Step 4 — Open the dashboard
 
 Open `http://localhost:7842` in your browser. Fill in:
-- **Git Provider**: GitLab or GitHub  
+- **Git Provider**: GitLab or GitHub
 - **API URL**: Your instance URL (e.g. `https://gitlab.com` or `https://api.github.com`)
-- **Personal Access Token**: paste your token
+- **Your username** (optional): filters to MRs/PRs assigned to you
 - **Projects to watch**: comma-separated paths (e.g. `myorg/my-repo`)
 - **Guidelines Repo** (optional): repo with `AGENTS.frontend.md` / `AGENTS.backend.md`
 
-Click **Connect & Load Reviews**.
+Click **Connect & Load Reviews**. No token needed in the form — it's read from `~/.mr-reviewer-pat` automatically.
 
 ## Using in Cowork chat
 
