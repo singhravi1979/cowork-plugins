@@ -54,7 +54,9 @@ function getApiBase() {
   }
   const raw = process.env.GITLAB_API_URL || '';
   if (raw && !raw.startsWith('${')) return raw.replace(/\/$/, '');
-  return (cfg.apiUrl || 'https://gitlab.com/api/v4').replace(/\/$/, '');
+  // Use apiUrl or glUrl, ensure /api/v4 is appended for GitLab
+  const base = (cfg.apiUrl || cfg.glUrl || 'https://gitlab.com').replace(/\/$/, '');
+  return base.endsWith('/api/v4') ? base : base + '/api/v4';
 }
 
 // ── MCP tools ─────────────────────────────────────────────────────────
