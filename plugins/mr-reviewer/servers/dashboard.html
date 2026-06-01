@@ -120,12 +120,6 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; b
   </div>
 
   <div class="field">
-    <label id="lbl-pat">Personal Access Token <span style="color:var(--red)">*</span></label>
-    <input type="password" id="cfg-pat" placeholder="glpat-..." autocomplete="off">
-    <div class="hint" id="hint-pat">GitLab &rarr; User Settings &rarr; Access Tokens &rarr; scope: api</div>
-  </div>
-
-  <div class="field">
     <label>Your username <span style="font-weight:400;color:var(--text-muted)">(optional)</span></label>
     <input type="text" id="cfg-me" placeholder="your-username" autocomplete="off">
     <div class="hint">Filter to PRs/MRs where you are assignee or reviewer. Leave blank to show all.</div>
@@ -193,47 +187,33 @@ let CFG = ls.get('mr_cfg') || {};
 let MRS = [];
 let activeFilter = 'all';
 
-// ── API base (now routes through local server on 7842) ────────────────
+// ── All API calls route through the local server (no PAT in browser) ──
 const API_BASE = 'http://localhost:7842';
 const API_TIMEOUT_MS = 20000;
 
-function providerBase() {
-  var p = CFG.provider || 'gitlab';
-  if (p === 'github') {
-    return (CFG.glUrl || 'https://api.github.com').replace(/\/$/, '');
-  }
-  return (CFG.glUrl || 'https://gitlab.com').replace(/\/$/, '') + '/api/v4';
-}
-
-function authHeaders() {
-  var p = CFG.provider || 'gitlab';
-  if (p === 'github') {
-    return { 'Authorization': 'Bearer ' + (CFG.pat || ''), 'Accept': 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', 'User-Agent': 'mr-reviewer-cowork-plugin/2.0.0' };
-  }
-  return { 'PRIVATE-TOKEN': CFG.pat || '' };
-}
-
-async function apiFetch(path, opts) {
+async function serverFetch(url, opts) {
   opts = opts || {};
   var controller = new AbortController();
   var timer = setTimeout(function() { controller.abort(); }, API_TIMEOUT_MS);
   try {
-    var headers = Object.assign(authHeaders(), opts.headers || {});
-    var res = await fetch(providerBase() + path, {
+    var res = await fetch(url, {
       method: opts.method || 'GET',
-      headers: headers,
+      headers: opts.headers || {},
       body: opts.body ? JSON.stringify(opts.body) : undefined,
       signal: controller.signal,
     });
     if (!res.ok) {
       var errText = await res.text().catch(function() { return ''; });
-      throw new Error((CFG.provider === 'github' ? 'GitHub' : 'GitLab') + ' ' + res.status + ': ' + errText.slice(0, 200));
+      throw new Error('Server ' + res.status + ': ' + errText.slice(0, 200));
     }
     var ct = res.headers.get('content-type') || '';
     if (ct.indexOf('application/json') >= 0) return res.json();
     return res.text();
   } catch(e) {
     if (e.name === 'AbortError') throw new Error('Request timed out after ' + (API_TIMEOUT_MS/1000) + 's');
+    if (e.message && e.message.indexOf('Failed to fetch') >= 0) {
+      throw new Error('Cannot reach mr-reviewer server at localhost:7842. Make sure the plugin is installed and Cowork is running.');
+    }
     throw e;
   } finally {
     clearTimeout(timer);
@@ -280,49 +260,19 @@ function normalisePR(raw) {
 }
 
 async function mcpCall(tool, args) {
-  var p = CFG.provider || 'gitlab';
-  var pid = p === 'github' ? String(args.project_id || '') : encodeURIComponent(String(args.project_id || ''));
-
   switch (tool) {
-    case 'list_merge_requests': {
-      var path = p === 'github'
-        ? '/repos/' + String(args.project_id || '') + '/pulls?state=open&per_page=' + (args.per_page || 100)
-        : '/projects/' + pid + '/merge_requests?state=opened&scope=all&per_page=' + (args.per_page || 100);
-      var raw = await apiFetch(path);
-      return Array.isArray(raw) ? raw.map(normalisePR) : raw;
-    }
-    case 'get_merge_request_diffs': {
-      var iid = Number(args.merge_request_iid);
-      if (p === 'github') {
-        return apiFetch('/repos/' + String(args.project_id || '') + '/pulls/' + iid + '/files?per_page=50');
-      }
-      try {
-        var d = await apiFetch('/projects/' + pid + '/merge_requests/' + iid + '/diffs?per_page=50');
-        if (Array.isArray(d) && d.length) return d;
-        throw new Error('empty');
-      } catch(_) {
-        var d2 = await apiFetch('/projects/' + pid + '/merge_requests/' + iid + '/changes');
-        return Array.isArray(d2) ? d2 : (d2 && d2.changes ? d2.changes : []);
-      }
-    }
-    case 'get_file_contents': {
-      if (p === 'github') {
-        var parts = String(args.project_id || '').split('/');
-        var owner = parts[0], repo = parts.slice(1).join('/');
-        var res = await apiFetch('/repos/' + owner + '/' + repo + '/contents/' + String(args.file_path) + (args.ref ? '?ref=' + encodeURIComponent(args.ref) : ''));
-        if (res && res.content) return atob(res.content.replace(/\n/g,''));
-        return typeof res === 'string' ? res : JSON.stringify(res);
-      }
-      return apiFetch('/projects/' + pid + '/repository/files/' + encodeURIComponent(String(args.file_path)) + '/raw?ref=' + encodeURIComponent(String(args.ref || 'HEAD')));
-    }
-    case 'create_merge_request_note': {
-      var niid = Number(args.merge_request_iid);
-      if (p === 'github') {
-        var parts2 = String(args.project_id || '').split('/');
-        return apiFetch('/repos/' + parts2[0] + '/' + parts2.slice(1).join('/') + '/issues/' + niid + '/comments', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: { body: String(args.body) } });
-      }
-      return apiFetch('/projects/' + pid + '/merge_requests/' + niid + '/notes', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: { body: String(args.body) } });
-    }
+    case 'list_merge_requests':
+      return serverFetch(API_BASE + '/api/mrs?project=' + encodeURIComponent(args.project_id) + '&per_page=' + (args.per_page || 100));
+    case 'get_merge_request_diffs':
+      return serverFetch(API_BASE + '/api/diff?project=' + encodeURIComponent(args.project_id) + '&iid=' + Number(args.merge_request_iid));
+    case 'get_file_contents':
+      return serverFetch(API_BASE + '/api/file?project=' + encodeURIComponent(args.project_id) + '&path=' + encodeURIComponent(args.file_path) + '&ref=' + encodeURIComponent(args.ref || 'HEAD'));
+    case 'create_merge_request_note':
+      return serverFetch(API_BASE + '/api/notes', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: { project: args.project_id, iid: Number(args.merge_request_iid), body: String(args.body) },
+      });
     default:
       throw new Error('Unknown tool: ' + tool);
   }
@@ -494,64 +444,30 @@ async function fetchAgents(mr) {
   return mergeAndDedup(results[1], results[0]);
 }
 
-// ── AI Review (uses Claude subscription via window.cowork.askClaude) ──
+// ── AI Review — generated via Cowork chat, displayed here ─────────────
+// Reviews are generated by saying "review !{iid}" in Cowork and stored
+// via the daily scheduled task. This function shows the draft if available.
 async function generateReview(mr, cardEl) {
   var wrap = cardEl.querySelector('.review-wrap');
   wrap.style.display = 'block';
-  var sid = 'gen-' + mr.project_id + '-' + mr.iid;
+  var pid = String(mr.project_id), iid = String(mr.iid);
+
+  // Check if a draft already exists from the scheduled task
+  var st = getRS(mr);
+  if (st.review) {
+    renderReviewSection(mr, cardEl, st.review, false);
+    return;
+  }
+
   wrap.innerHTML = '<div class="review-label">&#10024; AI Review</div>' +
-    '<div class="generating"><div class="spinner"></div><span id="' + sid + '">Fetching diff&#8230;</span></div>';
-
-  function setStatus(msg) {
-    var el = document.getElementById(sid);
-    if (el) el.textContent = msg;
-  }
-
-  var prTerm = (CFG.provider === 'github') ? 'PR' : 'MR';
-
-  try {
-    setStatus('Fetching diff…');
-    var diffText = await fetchDiff(mr);
-    setStatus('Loading guidelines…');
-    var agents = await fetchAgents(mr);
-    setStatus('Running AI analysis…');
-
-    var agentsBlock = agents ? '\n\nProject Guidelines:\n' + agents.slice(0, 4000) : '';
-    var complianceSection = agents
-      ? '\n\n## Guideline Compliance\n(For each guideline above — confirm compliance or flag violations)'
-      : '';
-
-    var prompt = 'You are an expert code reviewer. Review this ' + prTerm + ' and give concise, actionable feedback.\n\n' +
-      prTerm + ' Title: ' + mr.title + '\n' +
-      'Description: ' + (mr.description || 'No description').slice(0, 600) + '\n' +
-      'Branch: ' + mr.source_branch + ' → ' + mr.target_branch + '\n' +
-      'Author: ' + (mr.author.name || mr.author.username || 'unknown') + '\n' +
-      'Files changed: ' + (mr.changes_count || '?') +
-      agentsBlock + '\n\n' +
-      'Review the diff below and respond in this exact format:\n\n' +
-      '## Summary\n(2–3 sentences: what this ' + prTerm + ' does and its overall quality)\n\n' +
-      '## Issues Found\n(Specific bugs, security concerns, logic errors, performance problems. If none, say "No significant issues found.")\n\n' +
-      '## Suggestions\n(Optional improvements — style, readability, test coverage)' +
-      complianceSection + '\n\nKeep it specific and actionable. Do not repeat the diff.';
-
-    var raw;
-    if (window.cowork && typeof window.cowork.askClaude === 'function') {
-      raw = await window.cowork.askClaude(prompt, [{ type: 'text', text: diffText }]);
-    } else {
-      throw new Error('AI review requires Cowork. Open this dashboard inside Claude Code with the Cowork session active.');
-    }
-    var reviewText = typeof raw === 'string' ? raw : ((raw && raw.content && raw.content[0]) ? raw.content[0].text : JSON.stringify(raw));
-
-    setRS(mr, { review: reviewText, generatedAt: Date.now() });
-    renderReviewSection(mr, cardEl, reviewText, false);
-    updateStats();
-
-  } catch(e) {
-    var pid = String(mr.project_id), iid = String(mr.iid);
-    wrap.innerHTML = '<div class="review-label">&#10024; AI Review</div>' +
-      '<div class="error-box" style="white-space:pre-wrap;font-family:monospace;font-size:12px">' + formatError(e) + '</div>' +
-      '<div style="margin-top:8px"><button class="btn btn-sm btn-purple" onclick="window._gen(\'' + pid + '\',\'' + iid + '\')">&#8635; Retry</button></div>';
-  }
+    '<div class="error-box" style="font-size:13px">' +
+    'No review generated yet for this ' + (mr.iid ? 'MR' : 'PR') + '.<br><br>' +
+    'To generate one, open <strong>Cowork</strong> and say:<br>' +
+    '<code style="font-size:12px;background:rgba(0,0,0,0.06);padding:2px 6px;border-radius:3px">' +
+    'review !' + mr.iid + ' in ' + mr.project_id + '</code><br><br>' +
+    'Or wait for the daily scheduled review to run.' +
+    '</div>' +
+    '<div style="margin-top:8px"><button class="btn btn-sm" onclick="location.reload()">&#8635; Check for review</button></div>';
 }
 
 window._gen = function(pid, iid) {
@@ -742,16 +658,10 @@ function applyProviderLabels(provider) {
     document.getElementById('lbl-api-url').innerHTML = 'GitHub URL <span style="color:var(--red)">*</span>';
     document.getElementById('cfg-gl-url').placeholder = 'https://api.github.com';
     document.getElementById('hint-api-url').textContent = 'Use https://api.github.com for GitHub.com, or your GitHub Enterprise URL.';
-    document.getElementById('lbl-pat').innerHTML = 'Personal Access Token <span style="color:var(--red)">*</span>';
-    document.getElementById('cfg-pat').placeholder = 'ghp_...';
-    document.getElementById('hint-pat').textContent = 'GitHub → Settings → Developer Settings → Personal access tokens → scope: repo';
   } else {
     document.getElementById('lbl-api-url').innerHTML = 'GitLab URL <span style="color:var(--red)">*</span>';
     document.getElementById('cfg-gl-url').placeholder = 'https://gitlab.com';
     document.getElementById('hint-api-url').textContent = 'Your GitLab instance URL. Use https://gitlab.com for GitLab.com.';
-    document.getElementById('lbl-pat').innerHTML = 'Personal Access Token <span style="color:var(--red)">*</span>';
-    document.getElementById('cfg-pat').placeholder = 'glpat-...';
-    document.getElementById('hint-pat').textContent = 'GitLab → User Settings → Access Tokens → scope: api';
   }
 }
 
@@ -809,7 +719,6 @@ function showSetup() {
   document.getElementById('setup').style.display = 'block';
   document.getElementById('app').style.display   = 'none';
   if (CFG.glUrl)      document.getElementById('cfg-gl-url').value      = CFG.glUrl;
-  if (CFG.pat)        document.getElementById('cfg-pat').value         = CFG.pat;
   if (CFG.me)         document.getElementById('cfg-me').value          = CFG.me;
   if (CFG.projects)   document.getElementById('cfg-projects').value    = CFG.projects;
   if (CFG.commonRepo) document.getElementById('cfg-common-repo').value = CFG.commonRepo;
@@ -841,7 +750,6 @@ document.getElementById('btn-connect').addEventListener('click', async function(
   btn.textContent = '⧓ Connecting…'; btn.disabled = true; errEl.style.display = 'none';
   try {
     var glUrl      = (document.getElementById('cfg-gl-url').value.trim() || (selectedProvider === 'github' ? 'https://api.github.com' : 'https://gitlab.com')).replace(/\/$/, '');
-    var pat        = document.getElementById('cfg-pat').value.trim();
     var me         = document.getElementById('cfg-me').value.trim();
     var projects   = document.getElementById('cfg-projects').value.trim();
     var commonRepo = document.getElementById('cfg-common-repo').value.trim();
@@ -856,7 +764,7 @@ document.getElementById('btn-connect').addEventListener('click', async function(
       errEl.innerHTML = formatError(new Error('Please enter at least one project path.'));
       errEl.style.display = 'block'; return;
     }
-    CFG = { provider: selectedProvider, glUrl: glUrl, pat: pat, me: me, projects: projects, commonRepo: commonRepo, frontendKw: frontendKw };
+    CFG = { provider: selectedProvider, glUrl: glUrl, me: me, projects: projects, commonRepo: commonRepo, frontendKw: frontendKw };
     ls.set('mr_cfg', CFG);
     // Persist org defaults back to server config (excludes PAT for security)
     fetch(API_BASE + '/api/config', {
