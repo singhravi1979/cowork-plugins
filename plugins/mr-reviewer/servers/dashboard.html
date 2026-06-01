@@ -852,11 +852,6 @@ document.getElementById('btn-connect').addEventListener('click', async function(
     var projects   = document.getElementById('cfg-projects').value.trim();
     var commonRepo = document.getElementById('cfg-common-repo').value.trim();
     var frontendKw = document.getElementById('cfg-frontend-kw').value.trim();
-    if (!pat) {
-      btn.disabled = false; btn.textContent = 'Connect & Load Reviews';
-      errEl.innerHTML = formatError(new Error('Please enter your Personal Access Token.'));
-      errEl.style.display = 'block'; return;
-    }
     if (!projects) {
       btn.disabled = false; btn.textContent = 'Connect & Load Reviews';
       errEl.innerHTML = formatError(new Error('Please enter at least one project path.'));
