@@ -1,14 +1,16 @@
 {
-  "version": "1",
+  "name": "iluminr-plugins",
+  "owner": {
+    "name": "iluminr"
+  },
   "plugins": [
     {
-      "id": "mr-reviewer",
-      "name": "MR Reviewer",
-      "version": "2.0.0",
-      "description": "AI-powered PR/MR review assistant for GitLab and GitHub. Generates structured code reviews against your team guidelines, posts reviews as comments, and supports daily scheduled reviews.",
-      "author": "community",
-      "keywords": ["gitlab", "github", "pull-request", "merge-request", "code-review", "ai", "guidelines"],
-      "downloadUrl": "https://raw.githubusercontent.com/singhravi1979/cowork-plugins/main/plugins/mr-reviewer/dist/mr-reviewer-v2.0.0.plugin"
+      "name": "mr-reviewer",
+      "source": "./plugins/mr-reviewer",
+      "description": "AI-powered PR/MR review assistant for GitLab and GitHub. Generates structured code reviews against your team guidelines (AGENTS.md + project CLAUDE.md), posts reviews as comments, and supports daily scheduled reviews.",
+      "homepage": "https://github.com/singhravi1979/cowork-plugins",
+      "license": "MIT",
+      "keywords": ["gitlab", "github", "pull-request", "merge-request", "code-review", "ai"]
     }
   ]
 }
