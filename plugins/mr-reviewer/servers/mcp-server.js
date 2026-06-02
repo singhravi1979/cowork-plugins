@@ -393,7 +393,13 @@ function startHttpServer() {
     res.writeHead(404); res.end('Not found');
   });
 
-  server.on('error', function(err) { log('HTTP error: ' + err.message); });
+  server.on('error', function(err) {
+    if (err.code === 'EADDRINUSE') {
+      log('Port ' + HTTP_PORT + ' already in use — another instance is running the HTTP server. MCP tools still available via stdio.');
+    } else {
+      log('HTTP error: ' + err.message);
+    }
+  });
   server.listen(HTTP_PORT, '127.0.0.1', function() {
     log('Ready  -> http://localhost:' + HTTP_PORT);
     log('Provider: ' + getProvider().name);
