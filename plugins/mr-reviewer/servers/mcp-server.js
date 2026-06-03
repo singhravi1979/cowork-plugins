@@ -62,13 +62,14 @@ function getApiBase() {
 // ── MCP tools ─────────────────────────────────────────────────────────
 
 const TOOLS = [
-  { name: 'list_merge_requests',       description: 'List open PRs/MRs for a project', inputSchema: { type: 'object', properties: { project_id: { type: 'string' }, per_page: { type: 'number' } }, required: ['project_id'] } },
-  { name: 'get_merge_request_diffs',   description: 'Get file diffs for a PR/MR',       inputSchema: { type: 'object', properties: { project_id: { type: 'string' }, merge_request_iid: { type: 'number' }, per_page: { type: 'number' } }, required: ['project_id', 'merge_request_iid'] } },
-  { name: 'create_merge_request_note', description: 'Post a comment on a PR/MR',       inputSchema: { type: 'object', properties: { project_id: { type: 'string' }, merge_request_iid: { type: 'number' }, body: { type: 'string' } }, required: ['project_id', 'merge_request_iid', 'body'] } },
-  { name: 'get_file_contents',         description: 'Get a file from a repo',           inputSchema: { type: 'object', properties: { project_id: { type: 'string' }, file_path: { type: 'string' }, ref: { type: 'string' } }, required: ['project_id', 'file_path'] } },
-  { name: 'get_guidelines',            description: 'Fetch, merge and cache coding guidelines. Auto-selects frontend/backend rules based on project name and changed file paths. Merges with project CLAUDE.md, deduplicates by section heading (project-specific wins).', inputSchema: { type: 'object', properties: { guidelines_repo: { type: 'string' }, project_id: { type: 'string' }, file_paths: { type: 'array', items: { type: 'string' } }, frontend_keywords: { type: 'string' }, force: { type: 'boolean' } }, required: [] } },
-  { name: 'save_review',               description: 'Save a generated review as a draft so it appears in the web dashboard. Call this after generating a review to make it visible at localhost:7842.', inputSchema: { type: 'object', properties: { project_id: { type: 'string' }, merge_request_iid: { type: 'number' }, title: { type: 'string' }, review: { type: 'string' } }, required: ['project_id', 'merge_request_iid', 'review'] } },
+  { name: 'list_merge_requests',       description: 'List open PRs/MRs for a project. Configured projects are in ~/.mr-reviewer-config.json.', inputSchema: { type: 'object', properties: { project_id: { type: 'string' }, per_page: { type: 'number' } }, required: ['project_id'] } },
+  { name: 'get_merge_request_diffs',   description: 'Get file diffs for a PR/MR.',       inputSchema: { type: 'object', properties: { project_id: { type: 'string' }, merge_request_iid: { type: 'number' }, per_page: { type: 'number' } }, required: ['project_id', 'merge_request_iid'] } },
+  { name: 'create_merge_request_note', description: 'Post a comment on a PR/MR.',       inputSchema: { type: 'object', properties: { project_id: { type: 'string' }, merge_request_iid: { type: 'number' }, body: { type: 'string' } }, required: ['project_id', 'merge_request_iid', 'body'] } },
+  { name: 'get_file_contents',         description: 'Get a file from a repo.',           inputSchema: { type: 'object', properties: { project_id: { type: 'string' }, file_path: { type: 'string' }, ref: { type: 'string' } }, required: ['project_id', 'file_path'] } },
+  { name: 'get_guidelines',            description: 'Fetch, merge and cache coding guidelines. Auto-selects frontend/backend rules based on project name and changed file paths. Merges with project CLAUDE.md, deduplicates by section heading (project-specific wins). If guidelines_repo is omitted, falls back to commonRepo from ~/.mr-reviewer-config.json. If frontend_keywords is omitted, falls back to frontendKw from config.', inputSchema: { type: 'object', properties: { guidelines_repo: { type: 'string' }, project_id: { type: 'string' }, file_paths: { type: 'array', items: { type: 'string' } }, frontend_keywords: { type: 'string' }, force: { type: 'boolean' } }, required: [] } },
+  { name: 'save_review',               description: 'Save a generated review as a draft so it appears in the web dashboard (localhost:7842). Call this after generating a review.', inputSchema: { type: 'object', properties: { project_id: { type: 'string' }, merge_request_iid: { type: 'number' }, title: { type: 'string' }, review: { type: 'string' } }, required: ['project_id', 'merge_request_iid', 'review'] } },
   { name: 'get_saved_reviews',         description: 'Get all saved draft reviews from the web dashboard store.', inputSchema: { type: 'object', properties: {}, required: [] } },
+  { name: 'get_config',                description: 'Get the current resolved configuration — provider, projects, guidelinesRepo, frontendKeywords, apiUrl. Call this once at session start to understand what is configured without reading files directly.', inputSchema: { type: 'object', properties: {}, required: [] } },
 ];
 
 async function callTool(name, args) {
@@ -92,12 +93,25 @@ async function callTool(name, args) {
     case 'get_file_contents': {
       return provider.getFile(apiBase, pat, args.project_id, String(args.file_path), String(args.ref || 'HEAD'));
     }
+    case 'get_config': {
+      const cfg = readConfig();
+      return {
+        provider: getProvider().name,
+        apiUrl: getApiBase(),
+        projects: (cfg.projects || '').split(',').map(function(p) { return p.trim(); }).filter(Boolean),
+        guidelinesRepo: cfg.commonRepo || cfg.guidelinesRepo || '',
+        frontendKeywords: cfg.frontendKw || 'web,ui,frontend,dashboard,react,angular,vue,client',
+        me: cfg.me || '',
+        pat: getPAT() ? 'set' : 'MISSING',
+      };
+    }
     case 'get_guidelines': {
-      const guidelinesRepo = args.guidelines_repo || readConfig().guidelinesRepo || '';
+      const cfg = readConfig();
+      const guidelinesRepo = args.guidelines_repo || cfg.commonRepo || cfg.guidelinesRepo || '';
       const projectId = args.project_id || '';
       const filePaths = Array.isArray(args.file_paths) ? args.file_paths : [];
       const force = !!args.force;
-      const kwRaw = args.frontend_keywords || readConfig().frontendKw || 'web,ui,frontend,dashboard,react,angular,vue,client';
+      const kwRaw = args.frontend_keywords || cfg.frontendKw || 'web,ui,frontend,dashboard,react,angular,vue,client';
       const frontendKws = kwRaw.split(',').map(function(k) { return k.trim().toLowerCase(); }).filter(Boolean);
 
       // ── Classify: frontend or backend? ─────────────────────────────────
@@ -226,7 +240,24 @@ async function callTool(name, args) {
 
 async function handleMcp(msg) {
   if (!msg.id && (msg.method === 'notifications/initialized' || msg.method === 'notifications/cancelled')) return null;
-  if (msg.method === 'initialize') return { jsonrpc: '2.0', id: msg.id, result: { protocolVersion: '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'mr-reviewer', version: '2.0.0' } } };
+  if (msg.method === 'initialize') {
+    const cfg = readConfig();
+    return { jsonrpc: '2.0', id: msg.id, result: {
+      protocolVersion: '2024-11-05',
+      capabilities: { tools: {} },
+      serverInfo: { name: 'mr-reviewer', version: '2.0.0' },
+      // Inject resolved config so clients get it at session start without any tool call
+      _config: {
+        provider: (providers[cfg.provider] || providers.gitlab).name,
+        projects: (cfg.projects || '').split(',').map(function(p) { return p.trim(); }).filter(Boolean),
+        guidelinesRepo: cfg.commonRepo || cfg.guidelinesRepo || '',
+        frontendKeywords: cfg.frontendKw || '',
+        apiUrl: getApiBase(),
+        me: cfg.me || '',
+        pat: getPAT() ? 'set' : 'MISSING',
+      },
+    }};
+  }
   if (msg.method === 'ping')       return { jsonrpc: '2.0', id: msg.id, result: {} };
   if (msg.method === 'tools/list') return { jsonrpc: '2.0', id: msg.id, result: { tools: TOOLS } };
   if (msg.method === 'tools/call') {
